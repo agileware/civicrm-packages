@@ -2436,16 +2436,23 @@ class DB_DataObject extends DB_DataObject_Overload
         $t= explode(' ',microtime());
         $_DB_DATAOBJECT['QUERYENDTIME'] = $time = $t[0]+$t[1];
 
+      $maxTries = defined('CIVICRM_DEADLOCK_RETRIES') ? CIVICRM_DEADLOCK_RETRIES : 3;
+      for ($tries = 0;$tries < $maxTries;$tries++) {
+        if ($_DB_driver == 'DB') {
+          try {
+            $result = $DB->query($string);
+          }
+          catch (PEAR_Exception $e) {
+            // If we have caught a deadlock - let it go around the loop until our tries limit is hit.
+            // else rethrow the exception.
+            if (!stristr($e->getCause()->getUserInfo(), 'nativecode=1205') || ($tries + 1) === $maxTries) {
+              throw $e;
+            }
+            CRM_Core_Error::debug_log_message('Retrying after deadlock hit on attempt ' . $tries + 1 . ' at query : ' . $string);
+            continue;
+          }
 
-        for ($tries = 0;$tries < 3;$tries++) {
-
-            if ($_DB_driver == 'DB') {
-                if ($tries) {
-                  CRM_Core_Error::debug_log_message('Attempt: ' . $tries + 1 . ' at query : ' . $string);
-                }
-                $result = $DB->query($string);
-
-            } else {
+        } else {
                 switch (strtolower(substr(trim($string),0,6))) {
 
                     case 'insert':
@@ -2460,7 +2467,7 @@ class DB_DataObject extends DB_DataObject_Overload
                 }
             }
 
-            // see if we got a failure.. - try again a few times..
+            // See CRM-21489 for why I believe this is never hit.
             if (!is_a($result,'PEAR_Error')) {
                 break;
             }
@@ -2470,7 +2477,6 @@ class DB_DataObject extends DB_DataObject_Overload
             sleep(1); // wait before retyring..
             $DB->connect($DB->dsn);
         }
-
 
         if (is_a($result,'PEAR_Error')) {
             if (!empty($_DB_DATAOBJECT['CONFIG']['debug'])) {
